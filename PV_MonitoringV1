@@ -1,0 +1,213 @@
+#include <pt.h>
+#include <SoftwareSerial.h>
+#include <dht.h>
+
+dht DHT;
+
+SoftwareSerial gsm(10,11); 
+#define DHT11_PIN 6
+
+static struct pt pt1, pt2;
+
+String textMessage;
+String CellNumtemp;
+String CellNum;
+
+const int currentSensor =A0;
+const int voltageSensor =A1;
+
+float vOUT = 0.0;
+float vIN = 0.0;
+float iOUT = 0.0;
+float iIN = 0.0;
+float R1 = 30002.0;
+float R2 = 7501.0;
+float multiplier =0.185;
+int value1 = 0;
+int value2 = 0;
+
+void setup() 
+{
+  PT_INIT(&pt1);
+  PT_INIT(&pt2);
+  pinMode(7,OUTPUT);
+  Serial.begin(9600);
+  gsm.begin(9600);
+  delay(5000);
+  Serial.println("GPRS ready...\r\n");
+  gsm.println("AT+CMGF=1\r"); // use full functionality (calls, sms, gprs) - see app note
+  ShowSerialData();
+  delay(100);
+  gsm.println("AT+CLIP=1\r"); // enable presentation number
+  ShowSerialData();
+  delay(100);
+  gsm.println("AT+CSCS=\"GSM\"\r"); // configure sms as standard text messages
+  ShowSerialData();
+  delay(100);
+  gsm.println("AT+CNMI=2,2,0,0,0\r"); // alert our GSM shield and now whenever it will receive message
+  ShowSerialData();
+  delay(100); 
+      
+}
+
+
+void send_data()
+{
+  gsm.println("AT");
+  delay(1000);
+  gsm.println("AT+CPIN?");
+  delay(1000);
+  gsm.println("AT+CREG?");
+  delay(1000);
+  gsm.println("AT+CGATT?");
+  delay(1000);
+  gsm.println("AT+CIPSHUT");
+  delay(1000);
+  gsm.println("AT+CIPSTATUS");
+  delay(2000);
+  gsm.println("AT+CIPMUX=0");
+  delay(2000);
+  gsm.println("AT+CSTT=\"free\"");//start task and setting the APN,
+  delay(1000);
+  gsm.println("AT+CIICR");//bring up wireless connection
+  delay(3000);
+  gsm.println("AT+CIFSR");//get local IP adress
+  delay(2000);
+  gsm.println("AT+CIPSPRT=0");
+  delay(3000);
+  gsm.println("AT+CIPSTART=\"TCP\",\"api.thingspeak.com\",\"80\"");//start up the connection
+  delay(6000); 
+  gsm.println("AT+CIPSEND");//begin send data to remote server
+  delay(4000);
+  String str="GET https://api.thingspeak.com/update?api_key=KBXJB73STRDHZJVL&field1="; //+ String(U) +"&field2="+String(I);
+  gsm.println(str);//begin send data to remote server
+  delay(4000);
+  gsm.println((char)26);//sending
+  delay(5000);//waitting for reply, important! the time is base on the condition of internet 
+  gsm.println("AT+CIPSHUT");//close the connection
+  delay(100);
+  gsm.println("AT+CMGF=1\r"); // use full functionality (calls, sms, gprs) - see app note
+  ShowSerialData();
+  delay(1000);
+  gsm.println("AT+CLIP=1\r"); // enable presentation number
+  ShowSerialData();
+  delay(1000);
+  gsm.println("AT+CSCS=\"GSM\"\r"); // configure sms as standard text messages
+  ShowSerialData();
+  delay(1000);
+  gsm.println("AT+CNMI=2,2,0,0,0\r"); // alert our GSM shield and now whenever it will receive message
+  ShowSerialData();
+  delay(5000);    
+} 
+
+static int protothread1(struct pt *pt) 
+{
+  PT_BEGIN(pt);
+  if(gsm.available()>0)
+  {
+    textMessage = gsm.readString();
+    Serial.println(textMessage);
+    int chk = DHT.read11(DHT11_PIN);
+    CellNumtemp = textMessage.substring(textMessage.indexOf("+33")); //locate the cell number
+    CellNum = CellNumtemp.substring(0,12); //stock upcoming cell number in CellNum
+
+    if (textMessage.indexOf("STATUS")>=0)
+    {   
+      gsm.print("AT+CMGS=\"");
+      gsm.print(CellNum);
+      gsm.print("\"\r"); 
+      ShowSerialData();
+      delay(500);
+      gsm.println("Informations PV :");
+      gsm.println();
+        
+      ///TEMPERATURE & Humidity
+
+      gsm.print("Temperature = ");
+      gsm.print(DHT.temperature);
+      gsm.println(" C");
+      gsm.print("Humidity = ");
+      gsm.print(DHT.humidity);
+      gsm.println(" %");
+      gsm.println();
+
+      ///Voltage, Current & Power
+
+      value1 = analogRead(voltageSensor);
+      vOUT = (value1 * 5.0) / 1024.0;
+      vIN = vOUT / (R2/(R1+R2));
+      gsm.print("Voltage = ");
+      gsm.println(vIN);
+
+      value2 = analogRead(currentSensor);
+      iOUT = (value2 * 5.0) / 1024.0;
+      iIN =(iOUT-2.5)/multiplier;
+      gsm.print("Current = ");
+      gsm.println(iIN);
+      gsm.println();
+
+      ///ON or OFF
+
+      if (digitalRead(7)==LOW)
+      {gsm.print("PV on");}
+      if (digitalRead(7)==HIGH) 
+      {gsm.print("PV off");}
+      
+      gsm.print((char)26);
+      delay(500);
+      gsm.println("AT+CMGD=1,4"); //delete all sms read/undread in SIM 
+    }
+     
+    if (textMessage.indexOf("ON")>=0)
+    {
+      digitalWrite(7,LOW);
+      gsm.print("AT+CMGS=\"");
+      gsm.print(CellNum);
+      gsm.print("\"\r"); 
+      delay(500);
+      gsm.print("PV on");
+      gsm.print((char)26);
+      delay(500);
+      gsm.println("AT+CMGD=1,4");
+    }
+    
+    if (textMessage.indexOf("OFF")>=0)
+    {
+      digitalWrite(7,HIGH);
+      gsm.print("AT+CMGS=\"");
+      gsm.print(CellNum);
+      gsm.print("\"\r"); 
+      delay(500);
+      gsm.print("PV off");
+      gsm.print((char)26);
+      delay(500);
+      gsm.println("AT+CMGD=1,4");
+    }
+   PT_END(pt);
+  }
+}
+
+void ShowSerialData() //debug prog
+{
+  while(gsm.available()!=0)
+    Serial.write(gsm.read());
+}
+
+static int protothread2(struct pt *pt, int interval) 
+{
+  static unsigned long timestamp = 0;
+  PT_BEGIN(pt);
+  while(1)
+  {
+    PT_WAIT_UNTIL(pt, millis() - timestamp > interval );
+    timestamp = millis();
+    send_data();
+  }       
+  PT_END(pt);
+}
+
+void loop() {
+  
+   protothread1(&pt1);
+   protothread2(&pt2,20000);
+}
